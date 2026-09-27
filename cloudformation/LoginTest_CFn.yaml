@@ -1,0 +1,150 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  Test environment for verifying login procedures
+  (Session Manager CUI / Session Manager port forwarding RDP / Fleet Manager RDP).
+  Assumes a PRIVATE subnet with NO existing SSM endpoints:
+  this stack always creates the ssm / ssmmessages / ec2messages interface endpoints,
+  and the instance is launched without a public IP.
+  All three methods can be verified with this single SSM-managed Windows instance.
+
+Parameters:
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+    Description: Existing VPC ID (must have DNS support and DNS hostnames enabled)
+
+  SubnetId:
+    Type: AWS::EC2::Subnet::Id
+    Description: Existing PRIVATE subnet ID to place the instance and endpoints in (must belong to VpcId)
+
+  KeyName:
+    Type: AWS::EC2::KeyPair::KeyName
+    Description: Existing key pair name used to decrypt the Windows password / for Fleet Manager key pair auth
+
+  InstanceType:
+    Type: String
+    Default: t3.medium
+    Description: Instance type for the test instance
+
+  LatestWindowsAmiId:
+    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
+    Default: /aws/service/ami-windows-latest/Windows_Server-2022-English-Full-Base
+    Description: Latest Windows Server 2022 AMI (resolved automatically from the SSM public parameter)
+
+Resources:
+  # IAM role attached to the instance (required to make it an SSM managed node)
+  SSMInstanceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+
+  InstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles:
+        - !Ref SSMInstanceRole
+
+  # Instance SG: no inbound at all (all three methods connect via SSM)
+  InstanceSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Login test instance SG (no inbound, HTTPS 443 outbound only)
+      VpcId: !Ref VpcId
+      SecurityGroupEgress:
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+          Description: HTTPS outbound to SSM endpoints
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-instance-sg'
+
+  # SG for the SSM interface endpoints (allow 443 from the instance SG)
+  EndpointSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: SG for SSM VPC interface endpoints (allow 443 from instance SG)
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          SourceSecurityGroupId: !Ref InstanceSecurityGroup
+          Description: HTTPS from instance SG
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-endpoint-sg'
+
+  SSMEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      ServiceName: !Sub 'com.amazonaws.${AWS::Region}.ssm'
+      VpcId: !Ref VpcId
+      VpcEndpointType: Interface
+      PrivateDnsEnabled: true
+      SubnetIds:
+        - !Ref SubnetId
+      SecurityGroupIds:
+        - !Ref EndpointSecurityGroup
+
+  SSMMessagesEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      ServiceName: !Sub 'com.amazonaws.${AWS::Region}.ssmmessages'
+      VpcId: !Ref VpcId
+      VpcEndpointType: Interface
+      PrivateDnsEnabled: true
+      SubnetIds:
+        - !Ref SubnetId
+      SecurityGroupIds:
+        - !Ref EndpointSecurityGroup
+
+  EC2MessagesEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      ServiceName: !Sub 'com.amazonaws.${AWS::Region}.ec2messages'
+      VpcId: !Ref VpcId
+      VpcEndpointType: Interface
+      PrivateDnsEnabled: true
+      SubnetIds:
+        - !Ref SubnetId
+      SecurityGroupIds:
+        - !Ref EndpointSecurityGroup
+
+  TestInstance:
+    Type: AWS::EC2::Instance
+    Properties:
+      ImageId: !Ref LatestWindowsAmiId
+      InstanceType: !Ref InstanceType
+      KeyName: !Ref KeyName
+      IamInstanceProfile: !Ref InstanceProfile
+      NetworkInterfaces:
+        - DeviceIndex: 0
+          AssociatePublicIpAddress: false
+          SubnetId: !Ref SubnetId
+          GroupSet:
+            - !Ref InstanceSecurityGroup
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-login-test'
+
+Outputs:
+  InstanceId:
+    Description: ID of the test instance (used when starting a session or selecting it in the console)
+    Value: !Ref TestInstance
+
+  InstanceName:
+    Description: Name tag of the instance
+    Value: !Sub '${AWS::StackName}-login-test'
+
+  PortForwardCommand:
+    Description: start-session command to verify GUI (port forwarding RDP)
+    Value: !Sub 'aws ssm start-session --target ${TestInstance} --document-name AWS-StartPortForwardingSession --parameters "portNumber=3389,localPortNumber=13389"'
