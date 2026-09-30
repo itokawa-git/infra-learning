@@ -33,12 +33,12 @@ resource "aws_subnet" "public" {
 } 
 
 resource "aws_internet_gateway" "inetgw" {
-  vpc_id            = aws_vpc.main.id
+  vpc_id = aws_vpc.main.id
 
   tags = {
     Name = "${var.project_name}-inetgw"
   }
-} 
+}
 
 resource "aws_route_table" "public" {
   vpc_id = aws_vpc.main.id
@@ -49,7 +49,7 @@ resource "aws_route_table" "public" {
   }
 
   tags = {
-    Name = "${var.project_name}-root"
+    Name = "${var.project_name}-route"
   }
 }
 
