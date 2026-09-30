@@ -12,6 +12,10 @@ provider "aws" {
   profile = "learning"
 }
 
+data "aws_availability_zones" "available" {
+  state = "available"
+}
+
 resource "aws_vpc" "main" {
   cidr_block           = var.vpc_cidr
   enable_dns_support   = true
@@ -25,12 +29,22 @@ resource "aws_vpc" "main" {
 resource "aws_subnet" "public" {
   vpc_id            = aws_vpc.main.id
   cidr_block        = var.public_subnet_cidr
-  availability_zone = "ap-northeast-1a"
+  availability_zone = data.aws_availability_zones.available.names[0]
 
   tags = {
     Name = "${var.project_name}-public-subnet"
   }
-} 
+}
+
+resource "aws_subnet" "private" {
+  vpc_id            = aws_vpc.main.id
+  cidr_block        = cidrsubnet(var.vpc_cidr, 8, 2)
+  availability_zone = data.aws_availability_zones.available.names[1]
+
+  tags = {
+    Name = "${var.project_name}-private-subnet"
+  }
+}
 
 resource "aws_internet_gateway" "inetgw" {
   vpc_id = aws_vpc.main.id
